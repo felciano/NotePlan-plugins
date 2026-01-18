@@ -905,16 +905,22 @@ function safeAddTodoBelowHeading(note: TNote, formatted: string, headingName: st
 }
 
 /**
- * Ensure a heading exists in the note, creating it if necessary
+ * Add a task below a heading, creating the heading if it doesn't exist
  *
- * @param {TNote} note - the note to check/modify
- * @param {string} headingName - the heading to ensure exists
+ * @param {TNote} note - the note to modify
+ * @param {string} headingName - the heading to add the task below
+ * @param {string} taskContent - the formatted task content
  */
-function ensureHeadingExists(note: TNote, headingName: string): void {
+function addTaskBelowHeading(note: TNote, headingName: string, taskContent: string): void {
   const existingHeading = findHeading(note, headingName)
-  if (!existingHeading) {
+  if (existingHeading) {
+    // Heading exists, use the standard method
+    note.addTodoBelowHeadingTitle(taskContent, headingName, true, true)
+  } else {
+    // Heading doesn't exist - append heading and task directly
     logInfo(pluginJson, `Creating heading: ${headingName}`)
     note.appendParagraph(`### ${headingName}`, 'text')
+    note.appendTodo(taskContent)
   }
 }
 
@@ -926,7 +932,6 @@ function ensureHeadingExists(note: TNote, headingName: string): void {
  */
 async function writeOutTask(note: TNote, task: Object) {
   if (note) {
-    //console.log(note.content)
     logDebug(pluginJson, task)
     const formatted = formatTaskDetails(task)
     if (task.section_id !== null) {
@@ -934,24 +939,18 @@ async function writeOutTask(note: TNote, task: Object) {
       section = JSON.parse(section)
       if (section) {
         if (!existing.includes(task.id) && !just_written.includes(task.id)) {
-          ensureHeadingExists(note, section.name)
           logInfo(pluginJson, `1. Task will be added to ${note.title} below ${section.name} (${formatted})`)
-          safeAddTodoBelowHeading(note, formatted, section.name)
-
-          // add to just_written so they do not get duplicated in the Today note when updating all projects and today
+          addTaskBelowHeading(note, section.name, formatted)
           just_written.push(task.id)
         } else {
           logInfo(pluginJson, `Task is already in Noteplan ${task.id}`)
         }
       } else {
         // this one has a section ID but Todoist will not return a name
-        // Put it in with no heading
         logWarn(pluginJson, `Section ID ${task.section_id} did not return a section name`)
         if (!existing.includes(task.id) && !just_written.includes(task.id)) {
           logInfo(pluginJson, `2. Task will be added to ${note.title} (${formatted})`)
           note.appendTodo(formatted)
-
-          // add to just_written so they do not get duplicated in the Today note when updating all projects and today
           just_written.push(task.id)
         } else {
           logInfo(pluginJson, `Task is already in Noteplan (${formatted})`)
@@ -959,22 +958,16 @@ async function writeOutTask(note: TNote, task: Object) {
       }
     } else {
       // check for a default heading
-      // if there is a predefined header in settings
       if (setup.header !== '') {
         if (!existing.includes(task.id) && !just_written.includes(task.id)) {
-          ensureHeadingExists(note, setup.header)
           logInfo(pluginJson, `3. Task will be added to ${note.title} below ${setup.header} (${formatted})`)
-          safeAddTodoBelowHeading(note, formatted, setup.header)
-
-          // add to just_written so they do not get duplicated in the Today note when updating all projects and today
+          addTaskBelowHeading(note, setup.header, formatted)
           just_written.push(task.id)
         }
       } else {
         if (!existing.includes(task.id) && !just_written.includes(task.id)) {
           logInfo(pluginJson, `4. Task will be added to ${note.title} (${formatted})`)
           note.appendTodo(formatted)
-
-          // add to just_written so they do not get duplicated in the Today note when updating all projects and today
           just_written.push(task.id)
         }
       }
