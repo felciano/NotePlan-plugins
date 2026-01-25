@@ -376,7 +376,8 @@ export async function syncProject() {
       }
     }
 
-    await projectSync(note, projectId, multiProjectContext)
+    // Always pass isEditorNote=true since syncProject works on the currently open note
+    await projectSync(note, projectId, multiProjectContext, true)
   }
 
   // Close completed tasks in Todoist
@@ -638,9 +639,10 @@ function addSectionHeading(note: TNote, sectionName: string, projectHeadingLevel
  * @param {TNote} note - note that will be written to
  * @param {string} id - Todoist project ID
  * @param {?MultiProjectContext} multiProjectContext - context for multi-project mode
+ * @param {boolean} isEditorNote - whether this is the currently open note in Editor (for single-project mode)
  * @returns {Promise<void>}
  */
-async function projectSync(note: TNote, id: string, multiProjectContext: ?MultiProjectContext = null): Promise<void> {
+async function projectSync(note: TNote, id: string, multiProjectContext: ?MultiProjectContext = null, isEditorNote: boolean = false): Promise<void> {
   const task_result = await pullTodoistTasksByProject(id)
   const tasks: Array<Object> = JSON.parse(task_result)
 
@@ -672,27 +674,29 @@ async function projectSync(note: TNote, id: string, multiProjectContext: ?MultiP
 
     logDebug(pluginJson, `Organized ${tasks.results.length} tasks: ${tasksWithoutSection.length} without section, ${tasksBySection.size} sections`)
 
-    const isEditorNote = multiProjectContext.isEditorNote
+    const useEditor = multiProjectContext.isEditorNote
 
     // Write tasks without sections first (directly under project heading)
     for (const task of tasksWithoutSection) {
-      await writeOutTaskSimple(note, task, isEditorNote)
+      await writeOutTaskSimple(note, task, useEditor)
     }
 
     // Write each section with its tasks
     for (const [sectionName, sectionTasks] of tasksBySection) {
       // Add section heading
-      addSectionHeading(note, sectionName, multiProjectContext.projectHeadingLevel, isEditorNote)
+      addSectionHeading(note, sectionName, multiProjectContext.projectHeadingLevel, useEditor)
 
       // Write tasks under this section
       for (const task of sectionTasks) {
-        await writeOutTaskSimple(note, task, isEditorNote)
+        await writeOutTaskSimple(note, task, useEditor)
       }
     }
   } else {
     // Original behavior for single project or non-heading separators
+    // Use isEditorNote from multiProjectContext if available, otherwise use the parameter
+    const useEditor = multiProjectContext?.isEditorNote ?? isEditorNote
     for (const t of tasks.results) {
-      await writeOutTask(note, t)
+      await writeOutTask(note, t, useEditor)
     }
   }
 }
@@ -906,21 +910,32 @@ function safeAddTodoBelowHeading(note: TNote, formatted: string, headingName: st
 
 /**
  * Add a task below a heading, creating the heading if it doesn't exist
+ * Uses Editor methods for the currently open note for reliable updates
  *
  * @param {TNote} note - the note to modify
  * @param {string} headingName - the heading to add the task below
  * @param {string} taskContent - the formatted task content
+ * @param {boolean} isEditorNote - whether this is the currently open note in Editor
  */
-function addTaskBelowHeading(note: TNote, headingName: string, taskContent: string): void {
+function addTaskBelowHeading(note: TNote, headingName: string, taskContent: string, isEditorNote: boolean = false): void {
   const existingHeading = findHeading(note, headingName)
   if (existingHeading) {
     // Heading exists, use the standard method
-    note.addTodoBelowHeadingTitle(taskContent, headingName, true, true)
+    if (isEditorNote) {
+      Editor.addTodoBelowHeadingTitle(taskContent, headingName, true, true)
+    } else {
+      note.addTodoBelowHeadingTitle(taskContent, headingName, true, true)
+    }
   } else {
     // Heading doesn't exist - append heading and task directly
     logInfo(pluginJson, `Creating heading: ${headingName}`)
-    note.appendParagraph(`### ${headingName}`, 'text')
-    note.appendTodo(taskContent)
+    if (isEditorNote) {
+      Editor.appendParagraph(`### ${headingName}`, 'text')
+      Editor.appendParagraph(`- [ ] ${taskContent}`, 'text')
+    } else {
+      note.appendParagraph(`### ${headingName}`, 'text')
+      note.appendTodo(taskContent)
+    }
   }
 }
 
@@ -929,8 +944,9 @@ function addTaskBelowHeading(note: TNote, headingName: string, taskContent: stri
  *
  * @param {TNote} note - the note object that will get the task
  * @param {Object} task - the task object that will be written
+ * @param {boolean} isEditorNote - whether this is the currently open note in Editor
  */
-async function writeOutTask(note: TNote, task: Object) {
+async function writeOutTask(note: TNote, task: Object, isEditorNote: boolean = false) {
   if (note) {
     logDebug(pluginJson, task)
     const formatted = formatTaskDetails(task)
@@ -940,7 +956,7 @@ async function writeOutTask(note: TNote, task: Object) {
       if (section) {
         if (!existing.includes(task.id) && !just_written.includes(task.id)) {
           logInfo(pluginJson, `1. Task will be added to ${note.title} below ${section.name} (${formatted})`)
-          addTaskBelowHeading(note, section.name, formatted)
+          addTaskBelowHeading(note, section.name, formatted, isEditorNote)
           just_written.push(task.id)
         } else {
           logInfo(pluginJson, `Task is already in Noteplan ${task.id}`)
@@ -950,7 +966,11 @@ async function writeOutTask(note: TNote, task: Object) {
         logWarn(pluginJson, `Section ID ${task.section_id} did not return a section name`)
         if (!existing.includes(task.id) && !just_written.includes(task.id)) {
           logInfo(pluginJson, `2. Task will be added to ${note.title} (${formatted})`)
-          note.appendTodo(formatted)
+          if (isEditorNote) {
+            Editor.appendParagraph(`- [ ] ${formatted}`, 'text')
+          } else {
+            note.appendTodo(formatted)
+          }
           just_written.push(task.id)
         } else {
           logInfo(pluginJson, `Task is already in Noteplan (${formatted})`)
@@ -961,13 +981,17 @@ async function writeOutTask(note: TNote, task: Object) {
       if (setup.header !== '') {
         if (!existing.includes(task.id) && !just_written.includes(task.id)) {
           logInfo(pluginJson, `3. Task will be added to ${note.title} below ${setup.header} (${formatted})`)
-          addTaskBelowHeading(note, setup.header, formatted)
+          addTaskBelowHeading(note, setup.header, formatted, isEditorNote)
           just_written.push(task.id)
         }
       } else {
         if (!existing.includes(task.id) && !just_written.includes(task.id)) {
           logInfo(pluginJson, `4. Task will be added to ${note.title} (${formatted})`)
-          note.appendTodo(formatted)
+          if (isEditorNote) {
+            Editor.appendParagraph(`- [ ] ${formatted}`, 'text')
+          } else {
+            note.appendTodo(formatted)
+          }
           just_written.push(task.id)
         }
       }
